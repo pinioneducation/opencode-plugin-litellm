@@ -1,72 +1,76 @@
-# Installation Steps for opencode-plugin-litellm
+# Installation
 
 ## Prerequisites
 
-- OpenCode 2.2.x (or newer)
-- Node.js 22 or newer
-- Git
-- A running LiteLLM instance with API access
+- OpenCode 2.2.x or newer.
+- A running LiteLLM instance with API access.
 
-## Step 1: Clone the plugin repository
+No other software is required. The plugin has no dependencies, so you do not need Node.js, npm, or Git.
 
-Choose a location where you want to keep the plugin. A common place is inside your OpenCode config directory or a shared plugins folder.
+## Step 1 — Create the plugin folder
 
 ```sh
-git clone https://github.com/pinioneducation/opencode-plugin-litellm.git
-cd opencode-plugin-litellm
-npm install
+mkdir -p ~/.config/opencode/litellm-plugin
 ```
 
-## Step 2: Update your `opencode.jsonc` config
+On Windows PowerShell:
 
-Open or create `~/.config/opencode/opencode.jsonc` (or `%APPDATA%\opencode\opencode.jsonc` on Windows) and add the plugin with your LiteLLM base URL:
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.config\opencode\litellm-plugin" | Out-Null
+```
+
+## Step 2 — Copy the two files
+
+Download [`index.js`](./index.js) and [`package.json`](./package.json) into that folder.
+
+Using a terminal, macOS:
+
+```sh
+cd ~/.config/opencode/litellm-plugin
+curl -LO https://raw.githubusercontent.com/pinioneducation/opencode-plugin-litellm/main/index.js
+curl -LO https://raw.githubusercontent.com/pinioneducation/opencode-plugin-litellm/main/package.json
+```
+
+Windows PowerShell:
+
+```powershell
+$d = "$env:USERPROFILE\.config\opencode\litellm-plugin"
+Invoke-WebRequest "https://raw.githubusercontent.com/pinioneducation/opencode-plugin-litellm/main/index.js" -OutFile "$d\index.js"
+Invoke-WebRequest "https://raw.githubusercontent.com/pinioneducation/opencode-plugin-litellm/main/package.json" -OutFile "$d\package.json"
+```
+
+The folder should now contain exactly two files, with no `node_modules`.
+
+## Step 3 — Configure OpenCode
+
+Edit `~/.config/opencode/opencode.jsonc` (Windows: `C:\Users\<you>\.config\opencode\opencode.jsonc`):
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "/path/to/opencode-plugin-litellm",
-      // or use relative path from config location:
-      // "package": "../plugins/opencode-plugin-litellm",
-      // or from npm registry once published:
-      // "package": "@pinioneducation/opencode-plugin-litellm",
-      
+      "package": "./litellm-plugin",
       "options": {
-        "baseURL": "https://your-litellm-instance.example.com"
+        "baseURL": "https://your-litellm-host"
       }
     }
   ]
 }
 ```
 
-**On Windows:**
-```jsonc
-"package": "C:\\Users\\<user>\\path\\to\\opencode-plugin-litellm"
-```
+If the file already has settings, add the `"plugins"` array alongside them instead of replacing the file.
 
-**On macOS/Linux:**
-```jsonc
-"package": "/Users/<user>/path/to/opencode-plugin-litellm"
-```
+## Step 4 — Restart OpenCode
 
-## Step 3: Restart OpenCode
-
-Close the OpenCode desktop app completely and reopen it, or in the terminal:
-
-```sh
-opencode service restart
-# then
-opencode
-```
-
-Wait ~10 seconds for the plugin to load. Check the logs:
+Quit completely and reopen. Check that the plugin loaded:
 
 ```sh
 opencode api get /api/plugin | grep litellm
 ```
 
-You should see:
+Expected:
+
 ```json
 {
   "id": "litellm",
@@ -74,65 +78,47 @@ You should see:
 }
 ```
 
-## Step 4: Connect your LiteLLM API key
+If you see `"status": "failed"`, the `error` field names the cause.
 
-```sh
-opencode /connect
-```
+## Step 5 — Connect the API key
 
-Select **LiteLLM** → **API key** → paste your key.
+Run `/connect` in OpenCode, choose **LiteLLM**, then **API key**, and paste your key.
 
-## Step 5: Verify models are available
+## Step 6 — Pick a model
 
-```sh
-opencode /models
-```
+Run `/models` and choose a model under **LiteLLM**.
 
-You should see the models listed under the `litellm` provider.
+## Step 7 — Check workspace policy (only if the provider is hidden)
 
-## Step 6: (Optional) Check workspace policy
+If LiteLLM is connectable but never appears in the model list, check the Console workspace policy:
 
-If the provider doesn't appear in OpenCode even with a valid key, check your Console workspace policy. The workspace must allow `litellm`:
+Console → **Policies** → **Providers**:
 
-**Console** → **Policies** → **Providers** section → add:
 ```
 litellm  allow
 ```
 
-Or allow all:
+A blanket `provider.use * → deny` hides every provider that is not explicitly allowed, even with valid credentials.
+
+## Alternative — single file, no config entry
+
+OpenCode auto-loads `.js` files from `~/.config/opencode/plugins/`. Copy `index.js` there, rename it if you like, and set the URL through the environment:
+
+```sh
+export LITELLM_BASE_URL=https://your-litellm-host
 ```
-*  allow
-```
+
+This works without touching `opencode.jsonc`, but the environment variable must be visible to the process that starts OpenCode.
+
+## Updating
+
+Re-download both files over the existing ones and restart OpenCode. There is no install step.
 
 ## Troubleshooting
 
 | Issue | Solution |
-|-------|----------|
-| Plugin not loading | Check `opencode service logs` for errors. Ensure the path in `package` is correct. |
-| "Provider not found: litellm" | The plugin loaded but the workspace policy is denying it. Add `litellm` to the **Providers** allow list in Console. |
-| No models listed | Verify the API key is connected (`/connect`). Run `curl -H "Authorization: Bearer $KEY" https://your-litellm-instance/v1/models` to confirm the endpoint works. |
-| Models not updating | Models refresh only when you connect a new credential via `/connect`. To force a refresh, disconnect and reconnect your key. |
-
-## Environment variables (alternative to config)
-
-Instead of putting the URL in `opencode.jsonc`, you can use env vars:
-
-```sh
-export LITELLM_BASE_URL=https://your-litellm-instance.example.com
-export LITELLM_API_KEY=your-api-key
-```
-
-Then in `opencode.jsonc`:
-```jsonc
-"plugins": [
-  {
-    "package": "/path/to/opencode-plugin-litellm"
-    // baseURL and apiKey will be read from env vars
-  }
-]
-```
-
-## Next steps
-
-1. Use `/models` to select a LiteLLM model in a session.
-2. Start a conversation — the plugin uses OpenCode's built-in OpenAI-compatible runtime, so all standard model operations work.
+| --- | --- |
+| Plugin not in `/api/plugin` | Confirm the folder contains `index.js` and `package.json`, and that the config path resolves next to `opencode.jsonc`. Restart OpenCode fully. |
+| `"status": "failed"` | Read the `error` field. A syntax error or a missing file is the usual cause. |
+| Provider missing but plugin active | Console policy is denying it. Allow `litellm`. |
+| No models | The key is missing, wrong, or expired. Reconnect through `/connect`, or test with curl. |

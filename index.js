@@ -1,12 +1,22 @@
-import { Model, Plugin, Provider } from "@opencode/plugin"
-
-// OpenCode V2 port of @finger_xie/opencode-plugin-litellm.
-// Exposes LiteLLM as an OpenAI-compatible provider and discovers models
-// from `GET {baseURL}/models`.
+// OpenCode V2 plugin: LiteLLM as an OpenAI-compatible provider.
+//
+// Zero dependencies on purpose. This file runs inside OpenCode's own runtime,
+// so it needs no Node.js install, no npm install, and no node_modules folder.
+// Copy index.js + package.json into a folder and point OpenCode at it.
+//
+// Config:
+//   { "plugins": [{ "package": "./litellm-plugin",
+//                   "options": { "baseURL": "https://your-litellm-host" } }] }
+//
+// Env fallbacks: LITELLM_BASE_URL, LITELLM_API_KEY, LITELLM_MODELS_TIMEOUT_MS
+//
+// Models are discovered from `GET {baseURL}/models` at startup, and refreshed
+// when a credential is connected or switched through /connect.
 
 const PROVIDER_ID = "litellm"
 const DEFAULT_BASE_URL = "http://127.0.0.1:4000/v1"
 const DEFAULT_TIMEOUT_MS = 5000
+const DEFAULT_LIMIT = { context: 200000, output: 32000 }
 
 function firstString(...values) {
   for (const value of values) {
@@ -55,20 +65,28 @@ async function discoverModels({ baseURL, apiKey, timeoutMs }) {
     .filter((entry) => entry && typeof entry.id === "string" && entry.id.trim() !== "")
 }
 
-function toModelInfo(providerID, entry) {
-  const model = Model.Info.default(providerID, Model.ID.make(entry.id))
-
+/** Plain object, shaped like OpenCode's model schema. */
+function toModelInfo(entry) {
+  const id = entry.id.trim()
   const context = firstNumber(entry.max_input_tokens, entry.context_window, entry.max_context_tokens)
   const output = firstNumber(entry.max_output_tokens, entry.max_tokens)
-  if (context !== undefined || output !== undefined) {
-    model.limit = {
-      ...model.limit,
-      ...(context !== undefined ? { context } : {}),
-      ...(output !== undefined ? { output } : {}),
-    }
-  }
 
-  return model
+  return {
+    id,
+    modelID: id,
+    providerID: PROVIDER_ID,
+    name: id,
+    capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+    variants: [],
+    time: { released: 0 },
+    cost: [],
+    status: "active",
+    enabled: true,
+    limit: {
+      context: context ?? DEFAULT_LIMIT.context,
+      output: output ?? DEFAULT_LIMIT.output,
+    },
+  }
 }
 
 async function readStoredKey(ctx) {
@@ -82,12 +100,16 @@ async function readStoredKey(ctx) {
       return credential.value.key
     }
   } catch {
-    // Ignore: treat an unreadable connection as "no stored key".
+    // Treat an unreadable connection as "no stored key".
   }
   return undefined
 }
 
-export default Plugin.define({
+/**
+ * A plugin definition is just `{ id, setup }`. OpenCode's schema rejects
+ * anything else, and accepts a plain object — no helper import required.
+ */
+export default {
   id: PROVIDER_ID,
   async setup(ctx) {
     const baseURL = normalizeBaseURL(ctx.options?.baseURL ?? process.env.LITELLM_BASE_URL)
@@ -131,42 +153,49 @@ export default Plugin.define({
     try {
       state.models = await discoverModels({ baseURL, apiKey: state.apiKey, timeoutMs })
     } catch (error) {
+      // Never block OpenCode startup when LiteLLM is down or unreachable.
       console.warn(`[litellm] model discovery failed for ${baseURL}: ${error.message}`)
     }
-
-    const providerID = Provider.ID.make(PROVIDER_ID)
 
     await ctx.provider.transform((editor) => {
       editor.add({
         info: {
-          ...Provider.Info.empty(providerID),
+          id: PROVIDER_ID,
           name: "LiteLLM",
           activation: "enabled",
           integrationID: PROVIDER_ID,
           package: "@opencode/ai/providers/openai-compatible",
           settings: { baseURL },
         },
-        models: state.models.map((entry) => toModelInfo(providerID, entry)),
+        models: state.models.map(toModelInfo),
       })
     })
 
     console.log(`[litellm] registered ${state.models.length} model(s) from ${baseURL}`)
 
-    // Refresh models when a user connects a credential through /connect.
-    // This avoids polling; models are re-fetched only when the integration state changes.
-    await ctx.event.on("integration.credential.created", async (event) => {
-      if (event.data?.integrationID !== PROVIDER_ID) return
+    // Refresh models when a credential is connected or switched through
+    // /connect. Event-driven, so nothing polls while OpenCode is idle.
+    void (async () => {
       try {
-        const next = await discoverModels({ baseURL, apiKey: event.data?.key || "", timeoutMs })
-        const before = state.models.map((entry) => entry.id).join("\n")
-        const after = next.map((entry) => entry.id).join("\n")
-        if (before === after) return
-        state.models = next
-        await ctx.provider.reload()
-        console.log(`[litellm] refreshed ${next.length} model(s) from ${baseURL}`)
+        for await (const _event of ctx.event.subscribe({ types: ["credential.updated"] })) {
+          const apiKey = await readStoredKey(ctx)
+          if (!apiKey || apiKey === state.apiKey) continue
+          try {
+            const next = await discoverModels({ baseURL, apiKey, timeoutMs })
+            const before = state.models.map((entry) => entry.id).join("\n")
+            const after = next.map((entry) => entry.id).join("\n")
+            state.apiKey = apiKey
+            if (before === after) continue
+            state.models = next
+            await ctx.provider.reload()
+            console.log(`[litellm] refreshed ${next.length} model(s) from ${baseURL}`)
+          } catch (error) {
+            console.warn(`[litellm] refresh failed: ${error.message}`)
+          }
+        }
       } catch (error) {
-        console.warn(`[litellm] refresh failed: ${error.message}`)
+        console.warn(`[litellm] credential watcher stopped: ${error.message}`)
       }
-    })
+    })()
   },
-})
+}

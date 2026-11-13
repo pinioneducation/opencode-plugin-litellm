@@ -1,0 +1,28 @@
+{
+  "name": "opencode-plugin-litellm",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenCode V2 plugin that exposes LiteLLM as an OpenAI-compatible provider.",
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "litellm",
+    "openai-compatible",
+    "llm"
+  ],
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.2.7"
+  }
+}
